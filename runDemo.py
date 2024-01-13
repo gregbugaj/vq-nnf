@@ -87,8 +87,88 @@ def runTM(
 
     feature_extractor = PixelFeatureExtractor(model_name=model_name, num_features=n_feature)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     bboxes_path = sorted([os.path.join(dataset_folder, i) for i in os.listdir(dataset_folder) if ".txt" in i])
     imgs_path = sorted([os.path.join(dataset_folder, i) for i in os.listdir(dataset_folder) if ".jpg" in i])
+    imgs_path = sorted([os.path.join(dataset_folder, i) for i in os.listdir(dataset_folder) if ".png" in i])
+
     num_samples = len(imgs_path) // 2
 
     tqdm_dataset = tqdm(desc="Images Processed", total=num_samples, position=0)
@@ -112,17 +192,31 @@ def runTM(
     for idx in range(num_samples):
         template_image = cv2.cvtColor(cv2.imread(imgs_path[2 * idx]), cv2.COLOR_BGR2RGB)
         query_image = cv2.cvtColor(cv2.imread(imgs_path[2 * idx + 1]), cv2.COLOR_BGR2RGB)
+
+        # kernel = np.ones((7, 7), np.uint8)
+        # template_image = cv2.e(template_image, kernel, iterations=1)
+        # query_image = cv2.dilate(query_image, kernel, iterations=1)
+
+        template_image = cv2.GaussianBlur(template_image, (7, 7), 0)
+        query_image = cv2.GaussianBlur(query_image, (7, 7), 0)
+
+        # overlay = cv2.addWeighted(template_image, 0.5, blur_template_image, 0.5, 0)
+        # cv2.imwrite(f"{exp_folder}/{idx+1}_overlay_template_image.png", overlay)
+
         template_bbox = read_gt(bboxes_path[2 * idx])
         query_gt_bbox = read_gt(bboxes_path[2 * idx + 1])
 
+        #debug info
         template_image_features = feature_extractor.get_features(template_image)
+        # ensure integer template bbox
+        template_bbox = [int(i) for i in template_bbox]
 
         temp_x, temp_y, temp_w, temp_h = template_bbox
         temp_ws.append(temp_w)
         temp_hs.append(temp_h)
         image_sizes.append(query_image.shape[0] * query_image.shape[1])
-        temp_x = max(temp_x, 0)
-        temp_y = max(temp_y, 0)
+        temp_x = int(max(temp_x, 0))
+        temp_y = int(max(temp_y, 0))
 
         template_features = template_image_features[:, temp_y : temp_y + temp_h, temp_x : temp_x + temp_w]
 
@@ -132,7 +226,7 @@ def runTM(
             n_code=n_code,
             filters_cat="haar",
             filter_params={"kernel_size": 3, "sigma": 2, "n_scales": scale, "filters": rect_haar_filter},
-            verbose=False,
+            verbose=True,
         )
 
         query_image_features = feature_extractor.get_features(query_image)
@@ -198,8 +292,10 @@ def runTM(
                 "kmeans_time": kmeans_time,
             }
         )
+
+        verbose = True
         iou_df.to_csv(f"{exp_folder}/iou_sr.csv", index=False)
-        if verbose == True:
+        if verbose:
             cv2.imwrite(
                 f"{exp_folder}/{idx+1}_template_image.png",
                 cv2.rectangle(
@@ -267,10 +363,13 @@ if __name__ == "__main__":
     if os.path.exists(args.dataset_path):
         datasets_folder = [args.dataset_path]
     else:
-        if args.dataset_path == "BBS":
+        if args.dataset_path == "BBS":            
             datasets_folder = [f"C:/Users/gupta/Desktop/BBS_data/BBS25_iter{i}" for i in range(1, 6)]
             datasets_folder.extend([f"C:/Users/gupta/Desktop/BBS_data/BBS50_iter{i}" for i in range(1, 6)])
             datasets_folder.extend([f"C:/Users/gupta/Desktop/BBS_data/BBS100_iter{i}" for i in range(1, 6)])
+
+            datasets_folder = [f"/home/gbugaj/datasets/BBSdata"]
+            datasets_folder = [f"/home/gbugaj/dev/Deep-DIM/RMSdata-Full"]
 
             if args.run_config == "rotate":
                 datasets_folder.extend([f"{x}_rot{angle}" for x in datasets_folder for angle in (60, 120, 180)])
@@ -297,12 +396,15 @@ if __name__ == "__main__":
         n_codes = [4, 8, 16, 32, 64, 128]
         rect_haar_filters = [1, 2, 3, 23]
         scales = [1, 2, 3]
+        pca_dims = [None, 18, 9]  # [None, 18, 9
     elif args.run_config == "scale":
         models = ["resnet18"]
         n_features = [512, 27]
         n_codes = [128]
         rect_haar_filters = [1, 2, 3, 23]
         scales = [3, 4]
+
+        pca_dims = [None, 18, 9]  # [None, 18, 9]# GB
     elif args.run_config == "rotate":
         models = ["resnet18"]
         n_features = [27]
