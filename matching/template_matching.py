@@ -2,6 +2,7 @@ import decimal
 import time
 
 import colorcet as cc
+import cv2
 import numpy as np
 import seaborn as sns
 import torch
@@ -68,6 +69,8 @@ class VQNNFMatcher:
         else:
             self.template_nnf = None
 
+        cv2.imwrite("/tmp/dim/template_nnf.png", self.template_nnf * 255)
+
         self.code_weights = np.ones(self.n_code) / self.n_code if code_weights is None else code_weights
 
         if filters_cat == "haar":
@@ -103,6 +106,7 @@ class VQNNFMatcher:
         nnf = one_hots.argmax(dim=0).cpu().numpy()
         if self.verbose:
             nnf = label2rgb(nnf, colors=self.colors)
+            cv2.imwrite("/tmp/dim/nnf.png", nnf * 255)
 
         return one_hots, nnf_idxs, sim_vals
 

@@ -7,6 +7,7 @@ import time
 import cv2
 import numpy as np
 import pandas as pd
+from sewar import rmse
 from tqdm import tqdm
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -65,6 +66,24 @@ def get_rotated_bbox(rotation, image_shape, query_bbox):
     return new_query_bbox
 
 
+def similarity_score(template, query, metric):
+    from skimage import metrics
+    p1 = cv2.cvtColor(template, cv2.COLOR_RGB2GRAY)
+    p2 = cv2.cvtColor(query, cv2.COLOR_RGB2GRAY)
+
+    s0 = rmse(p1, p2)  # value between 0 and 255
+    s0 = 1 - s0 / 255  # normalize rmse to 1
+
+    s1 = metrics.structural_similarity(
+        p1, p2, full=True, data_range=1
+    )[0]
+
+
+    print(f"RMSE: {s0}")
+    print(f"SSIM: {s1}")
+    return s1
+
+
 def runTM(
         dataset_folder,
         result_folder,
@@ -99,6 +118,7 @@ def runTM(
     time_desc = tqdm(total=0, position=4, bar_format="{desc}")
     kmeans_time_desc = tqdm(total=0, position=5, bar_format="{desc}")
 
+    similarities= []
     ious = []
     temp_ws = []
     temp_hs = []
@@ -166,6 +186,25 @@ def runTM(
         t2 = time.time()
 
         # torch.cuda.empty_cache()
+        # save query and template nnf
+        if verbose:
+            cv2.imwrite(
+                f"{exp_folder}/{idx + 1}_template_nnf.png",
+                cv2.applyColorMap(
+                    (((template_nnf - template_nnf.min()) / (template_nnf.max() - template_nnf.min())) * 255).astype(
+                        np.uint8
+                    ),
+                    cv2.COLORMAP_JET,
+                ),
+            )
+
+            cv2.imwrite(
+                f"{exp_folder}/{idx + 1}_query_nnf.png",
+                cv2.applyColorMap(
+                    (((query_nnf - query_nnf.min()) / (query_nnf.max() - query_nnf.min())) * 255).astype(np.uint8),
+                    cv2.COLORMAP_JET,
+                ),
+            )
 
         query_w, query_h = template_bbox[3], template_bbox[2]
         if run_config == "rotate":
@@ -179,7 +218,7 @@ def runTM(
 
         xs.append(query_y)
         ys.append(query_x)
-        ws.append(query_h)
+        ws.append(query_h)  # This looks like a bug, but it's not. we have to swap h and w here
         hs.append(query_w)
 
         bbox_iou = bops.box_iou(
@@ -193,6 +232,50 @@ def runTM(
                 ]
             ).unsqueeze(0),
         )
+
+        # This looks like a bug, but it's not. we have to swap h and w here
+        qxs = query_y
+        qys = query_x
+        qws = query_h
+        qhs = query_w
+
+        # query_pred_snippet = query_nnf[qys: qys + qhs, qxs: qxs + qws]
+        query_pred_snippet = query_image[qys: qys + qhs, qxs: qxs + qws, :]
+
+        query_gt_snippet = query_image[
+                           max(query_gt_bbox[1], 0): min(query_gt_bbox[1] + query_gt_bbox[3], query_image.shape[0]),
+                           max(query_gt_bbox[0], 0): min(query_gt_bbox[0] + query_gt_bbox[2], query_image.shape[1]),
+                           :,
+                           ]
+
+        if False:
+            template_snippet = template_nnf * 255
+            template_snippet = cv2.cvtColor(template_snippet.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+
+        if True:
+            template_snippet = template_image[
+                               max(temp_y, 0): min(temp_y + temp_h, template_image.shape[0]),
+                               max(temp_x, 0): min(temp_x + temp_w, template_image.shape[1]),
+                               :,
+                               ]
+
+        if True:
+            hmap = (((heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())) * 255).astype(np.uint8)
+            # hmap = cv2.applyColorMap(hmap, cv2.COLORMAP_JET)
+
+            hmap_snippet = hmap[qys: qys + qhs, qxs: qxs + qws]
+            # get max value of heatmap from red channel only, image is in RGB format
+            # arg_max = np.argmax(hmap_snippet[:, :, 2])
+            # max_val = hmap_snippet[:, :, 2].flatten()[arg_max]
+            # norm_max_val = max_val  # / 255.0
+            cv2.imwrite(f"{exp_folder}/{idx + 1}_hmap_snippet.png", hmap_snippet)
+
+        cv2.imwrite(f"{exp_folder}/{idx + 1}_query_gt_snippet.png", query_gt_snippet)
+        cv2.imwrite(f"{exp_folder}/{idx + 1}_query_pd_snippet.png", query_pred_snippet)
+        cv2.imwrite(f"{exp_folder}/{idx + 1}_template_snippet.png", template_snippet)
+
+        sim_val = similarity_score(template_snippet, query_pred_snippet, "ssim")
+        similarities.append(sim_val)
 
         ious.append(bbox_iou.item())
         temp_match_time.append(t2 - t1)
@@ -218,6 +301,7 @@ def runTM(
                 "temp_size": np.array(temp_ws) * np.array(temp_hs),
                 "time": temp_match_time,
                 "kmeans_time": kmeans_time,
+                "similarity": similarities,
             }
         )
 
@@ -274,7 +358,6 @@ def runTM(
 
 
 def glow(glow_radius, glow_strength, src_image):
-
     # return src_image
     img_blurred = cv2.GaussianBlur(src_image, (glow_radius, glow_radius), 1)
     max_val = np.max(img_blurred, axis=2)
@@ -312,7 +395,7 @@ if __name__ == "__main__":
             datasets_folder.extend([f"C:/Users/gupta/Desktop/BBS_data/BBS100_iter{i}" for i in range(1, 6)])
 
             datasets_folder = [f"/home/gbugaj/datasets/BBSdata"]
-            datasets_folder = [f"/home/gbugaj/dev/Deep-DIM/RMSdata-Full"]
+            datasets_folder = [os.path.expanduser("~/dev/Deep-DIM/RMSdata-Full")]
 
             if args.run_config == "rotate":
                 datasets_folder.extend([f"{x}_rot{angle}" for x in datasets_folder for angle in (60, 120, 180)])
@@ -440,3 +523,5 @@ if __name__ == "__main__":
                                 )
 
                                 all_df.to_csv(f"{args.dataset_path}_vq_nnf_{args.run_config}_results.csv", index=False)
+# https://github.com/gpelouze/colormap_to_grayscale/blob/master/colormap_to_grayscale.py
+# https://groups.google.com/g/scikit-image/c/G086sjtVBlE
