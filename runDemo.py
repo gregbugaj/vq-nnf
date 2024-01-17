@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["PYTHONHASHSEED"] = str(42)
@@ -67,16 +66,16 @@ def get_rotated_bbox(rotation, image_shape, query_bbox):
 
 
 def runTM(
-    dataset_folder,
-    result_folder,
-    model_name,
-    n_feature,
-    n_code,
-    rect_haar_filter,
-    scale,
-    pca_dim,
-    verbose,
-    run_config=None,
+        dataset_folder,
+        result_folder,
+        model_name,
+        n_feature,
+        n_code,
+        rect_haar_filter,
+        scale,
+        pca_dim,
+        verbose,
+        run_config=None,
 ):
     exp_suffix = f"model_{model_name}_n_feats_{n_feature}_pcadims_{pca_dim}_n_codes_{n_code}_haar_filts_{rect_haar_filter}_scale_{scale}"
     exp_folder = f"{result_folder}/{exp_suffix}"
@@ -86,84 +85,6 @@ def runTM(
         os.makedirs(exp_folder)
 
     feature_extractor = PixelFeatureExtractor(model_name=model_name, num_features=n_feature)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     bboxes_path = sorted([os.path.join(dataset_folder, i) for i in os.listdir(dataset_folder) if ".txt" in i])
     imgs_path = sorted([os.path.join(dataset_folder, i) for i in os.listdir(dataset_folder) if ".jpg" in i])
@@ -196,17 +117,27 @@ def runTM(
         # kernel = np.ones((7, 7), np.uint8)
         # template_image = cv2.e(template_image, kernel, iterations=1)
         # query_image = cv2.dilate(query_image, kernel, iterations=1)
+        glow_strength = 1  # 0: no glow, no maximum
+        glow_radius = 25  # blur radius
 
-        template_image = cv2.GaussianBlur(template_image, (7, 7), 0)
-        query_image = cv2.GaussianBlur(query_image, (7, 7), 0)
+        # Only modify the RED channel
+        if glow_strength > 0:
+            template_image = glow(glow_radius, glow_strength, template_image)
+            query_image = glow(glow_radius, glow_strength, query_image)
 
-        # overlay = cv2.addWeighted(template_image, 0.5, blur_template_image, 0.5, 0)
-        # cv2.imwrite(f"{exp_folder}/{idx+1}_overlay_template_image.png", overlay)
+            template_image = cv2.cvtColor(template_image, cv2.COLOR_RGB2BGR)
+            query_image = cv2.cvtColor(query_image, cv2.COLOR_RGB2BGR)
+
+            cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_template_GLOW.png", template_image)
+            cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_query_GLOW.png", query_image)
+
+            template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
+            query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
 
         template_bbox = read_gt(bboxes_path[2 * idx])
         query_gt_bbox = read_gt(bboxes_path[2 * idx + 1])
 
-        #debug info
+        # debug info
         template_image_features = feature_extractor.get_features(template_image)
         # ensure integer template bbox
         template_bbox = [int(i) for i in template_bbox]
@@ -218,7 +149,7 @@ def runTM(
         temp_x = int(max(temp_x, 0))
         temp_y = int(max(temp_y, 0))
 
-        template_features = template_image_features[:, temp_y : temp_y + temp_h, temp_x : temp_x + temp_w]
+        template_features = template_image_features[:, temp_y: temp_y + temp_h, temp_x: temp_x + temp_w]
 
         template_matcher = VQNNFMatcher(
             template=template_features,
@@ -297,7 +228,7 @@ def runTM(
         iou_df.to_csv(f"{exp_folder}/iou_sr.csv", index=False)
         if verbose:
             cv2.imwrite(
-                f"{exp_folder}/{idx+1}_template_image.png",
+                f"{exp_folder}/{idx + 1}_template_image.png",
                 cv2.rectangle(
                     cv2.cvtColor(template_image, cv2.COLOR_RGB2BGR),
                     (temp_x, temp_y),
@@ -308,7 +239,7 @@ def runTM(
             )
 
             cv2.imwrite(
-                f"{exp_folder}/{idx+1}_query_image.png",
+                f"{exp_folder}/{idx + 1}_query_image.png",
                 cv2.rectangle(
                     cv2.rectangle(
                         cv2.cvtColor(query_image, cv2.COLOR_RGB2BGR),
@@ -332,7 +263,7 @@ def runTM(
                 cv2.COLORMAP_JET,
             )
             cv2.imwrite(
-                f"{exp_folder}/{idx+1}_heatmap.png",
+                f"{exp_folder}/{idx + 1}_heatmap.png",
                 cv2.rectangle(
                     heatmap,
                     (query_y, query_x),
@@ -343,6 +274,19 @@ def runTM(
             )
 
     return np.mean(ious), np.mean(np.array(ious) > 0.5), np.mean(temp_match_time), np.mean(kmeans_time)
+
+
+def glow(glow_radius, glow_strength, src_image):
+    img_blurred = cv2.GaussianBlur(src_image, (glow_radius, glow_radius), 1)
+    max_val = np.max(img_blurred, axis=2)
+    # max_val[max_val < 160] = 160
+    # max_val[max_val > 200] = 255
+    max_val = max_val.astype(np.uint8)
+    max_val = np.stack([np.zeros_like(max_val), np.zeros_like(max_val), max_val], axis=2)
+    max_val = cv2.GaussianBlur(max_val, (glow_radius, glow_radius), 1)
+    # combine the two images
+    img_blended = cv2.addWeighted(src_image, 1, max_val, glow_strength, 0)
+    return img_blended
 
 
 if __name__ == "__main__":
@@ -363,7 +307,7 @@ if __name__ == "__main__":
     if os.path.exists(args.dataset_path):
         datasets_folder = [args.dataset_path]
     else:
-        if args.dataset_path == "BBS":            
+        if args.dataset_path == "BBS":
             datasets_folder = [f"C:/Users/gupta/Desktop/BBS_data/BBS25_iter{i}" for i in range(1, 6)]
             datasets_folder.extend([f"C:/Users/gupta/Desktop/BBS_data/BBS50_iter{i}" for i in range(1, 6)])
             datasets_folder.extend([f"C:/Users/gupta/Desktop/BBS_data/BBS100_iter{i}" for i in range(1, 6)])
