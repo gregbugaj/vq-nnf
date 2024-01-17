@@ -114,11 +114,8 @@ def runTM(
         template_image = cv2.cvtColor(cv2.imread(imgs_path[2 * idx]), cv2.COLOR_BGR2RGB)
         query_image = cv2.cvtColor(cv2.imread(imgs_path[2 * idx + 1]), cv2.COLOR_BGR2RGB)
 
-        # kernel = np.ones((7, 7), np.uint8)
-        # template_image = cv2.e(template_image, kernel, iterations=1)
-        # query_image = cv2.dilate(query_image, kernel, iterations=1)
         glow_strength = 1  # 0: no glow, no maximum
-        glow_radius = 25  # blur radius
+        glow_radius = 13  # blur radius
 
         # Only modify the RED channel
         if glow_strength > 0:
@@ -277,16 +274,18 @@ def runTM(
 
 
 def glow(glow_radius, glow_strength, src_image):
+
+    # return src_image
     img_blurred = cv2.GaussianBlur(src_image, (glow_radius, glow_radius), 1)
     max_val = np.max(img_blurred, axis=2)
     # max_val[max_val < 160] = 160
     # max_val[max_val > 200] = 255
     max_val = max_val.astype(np.uint8)
-    max_val = np.stack([np.zeros_like(max_val), np.zeros_like(max_val), max_val], axis=2)
+    max_val = np.stack([max_val, np.zeros_like(max_val), np.zeros_like(max_val)], axis=2)
     max_val = cv2.GaussianBlur(max_val, (glow_radius, glow_radius), 1)
     # combine the two images
-    img_blended = cv2.addWeighted(src_image, 1, max_val, glow_strength, 0)
-    return img_blended
+    # img_blended = cv2.addWeighted(src_image, 1, max_val, .5, 0)
+    return max_val
 
 
 if __name__ == "__main__":
