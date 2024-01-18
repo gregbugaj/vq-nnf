@@ -1,13 +1,12 @@
 import argparse
 import os
 import random
-import shutil
-
 import time
+
 import cv2
 import numpy as np
 import pandas as pd
-from sewar import rmse
+from skimage.exposure import rescale_intensity
 from tqdm import tqdm
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -16,7 +15,7 @@ os.environ["PYTHONHASHSEED"] = str(42)
 
 import torch
 import torchvision.ops.boxes as bops
-
+from matching.sim import similarity_score
 from matching.feature_extraction import PixelFeatureExtractor
 from matching.template_matching import VQNNFMatcher
 
@@ -66,24 +65,6 @@ def get_rotated_bbox(rotation, image_shape, query_bbox):
     return new_query_bbox
 
 
-def similarity_score(template, query, metric):
-    from skimage import metrics
-    p1 = cv2.cvtColor(template, cv2.COLOR_RGB2GRAY)
-    p2 = cv2.cvtColor(query, cv2.COLOR_RGB2GRAY)
-
-    s0 = rmse(p1, p2)  # value between 0 and 255
-    s0 = 1 - s0 / 255  # normalize rmse to 1
-
-    s1 = metrics.structural_similarity(
-        p1, p2, full=True, data_range=1
-    )[0]
-
-
-    print(f"RMSE: {s0}")
-    print(f"SSIM: {s1}")
-    return s1
-
-
 def runTM(
         dataset_folder,
         result_folder,
@@ -118,7 +99,7 @@ def runTM(
     time_desc = tqdm(total=0, position=4, bar_format="{desc}")
     kmeans_time_desc = tqdm(total=0, position=5, bar_format="{desc}")
 
-    similarities= []
+    similarities = []
     ious = []
     temp_ws = []
     temp_hs = []
@@ -135,19 +116,20 @@ def runTM(
         query_image = cv2.cvtColor(cv2.imread(imgs_path[2 * idx + 1]), cv2.COLOR_BGR2RGB)
 
         glow_strength = 1  # 0: no glow, no maximum
-        glow_radius = 13  # blur radius
+        glow_radius = 25  # blur radius
 
         # Only modify the RED channel
         if glow_strength > 0:
-            template_image = glow(glow_radius, glow_strength, template_image)
-            query_image = glow(glow_radius, glow_strength, query_image)
-
             template_image = cv2.cvtColor(template_image, cv2.COLOR_RGB2BGR)
             query_image = cv2.cvtColor(query_image, cv2.COLOR_RGB2BGR)
 
-            cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_template_GLOW.png", template_image)
-            cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_query_GLOW.png", query_image)
+            template_image = augment_document(glow_radius, glow_strength, template_image)
+            query_image = augment_document(glow_radius, glow_strength, query_image)
 
+            # cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_template_GLOW.png", template_image)
+            # cv2.imwrite(f"{exp_folder}/{idx + 1}_overlay_query_GLOW.png", query_image)
+
+            # expect RGB images
             template_image = cv2.cvtColor(template_image, cv2.COLOR_BGR2RGB)
             query_image = cv2.cvtColor(query_image, cv2.COLOR_BGR2RGB)
 
@@ -187,7 +169,7 @@ def runTM(
 
         # torch.cuda.empty_cache()
         # save query and template nnf
-        if verbose:
+        if False:  # verbose:
             cv2.imwrite(
                 f"{exp_folder}/{idx + 1}_template_nnf.png",
                 cv2.applyColorMap(
@@ -260,19 +242,21 @@ def runTM(
                                ]
 
         if True:
-            hmap = (((heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())) * 255).astype(np.uint8)
+            # hmap = (((heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())) * 255).astype(np.uint8)
             # hmap = cv2.applyColorMap(hmap, cv2.COLORMAP_JET)
 
-            hmap_snippet = hmap[qys: qys + qhs, qxs: qxs + qws]
-            # get max value of heatmap from red channel only, image is in RGB format
-            # arg_max = np.argmax(hmap_snippet[:, :, 2])
-            # max_val = hmap_snippet[:, :, 2].flatten()[arg_max]
-            # norm_max_val = max_val  # / 255.0
-            cv2.imwrite(f"{exp_folder}/{idx + 1}_hmap_snippet.png", hmap_snippet)
+            # convert distrib_sim probabilities to log probabilities
+            heatmap = rescale_intensity(heatmap, out_range=(0, 1))
+            hmap_snippet = heatmap[qys: qys + qhs, qxs: qxs + qws] * 255
+            ptx, pty = np.unravel_index(np.argmax(hmap_snippet), hmap_snippet.shape)
+            val = hmap_snippet[ptx, pty]
+            # print(f"val: {val}, ptx: {ptx}, pty: {pty}")
+            # cv2.imwrite(f"{exp_folder}/{idx + 1}_hmap_snippet.png", hmap_snippet)
 
-        cv2.imwrite(f"{exp_folder}/{idx + 1}_query_gt_snippet.png", query_gt_snippet)
-        cv2.imwrite(f"{exp_folder}/{idx + 1}_query_pd_snippet.png", query_pred_snippet)
-        cv2.imwrite(f"{exp_folder}/{idx + 1}_template_snippet.png", template_snippet)
+        if False:
+            cv2.imwrite(f"{exp_folder}/{idx + 1}_query_gt_snippet.png", query_gt_snippet)
+            cv2.imwrite(f"{exp_folder}/{idx + 1}_query_pd_snippet.png", query_pred_snippet)
+            cv2.imwrite(f"{exp_folder}/{idx + 1}_template_snippet.png", template_snippet)
 
         sim_val = similarity_score(template_snippet, query_pred_snippet, "ssim")
         similarities.append(sim_val)
@@ -335,7 +319,7 @@ def runTM(
                         query_gt_bbox[1] + query_gt_bbox[3],
                     ),
                     (0, 255, 0),
-                    3,
+                    2,
                 ),
             )
 
@@ -354,12 +338,25 @@ def runTM(
                 ),
             )
 
+    # convert ious to a number that can be used as filename
+    s = np.mean(ious) * 100
+    s = round(s, 4)
+    s = str(s).replace(".", "_")
+
+    with open(f"{exp_folder}/{s}_score.txt", "w") as OUT:
+        OUT.write(f"IOU: {np.mean(ious)}\n")
+        OUT.write(f"Success Rate: {np.mean(np.array(ious) > 0.5)}\n")
+        OUT.write(f"Time: {np.mean(temp_match_time)}\n")
+        OUT.write(f"Kmeans Time: {np.mean(kmeans_time)}\n")
+
     return np.mean(ious), np.mean(np.array(ious) > 0.5), np.mean(temp_match_time), np.mean(kmeans_time)
 
 
-def glow(glow_radius, glow_strength, src_image):
-    # return src_image
-    img_blurred = cv2.GaussianBlur(src_image, (glow_radius, glow_radius), 1)
+def augment_document(glow_radius, glow_strength, src_image):
+    if True:
+        img_blurred = cv2.GaussianBlur(src_image, (glow_radius, glow_radius), 1)
+        return img_blurred
+
     max_val = np.max(img_blurred, axis=2)
     # max_val[max_val < 160] = 160
     # max_val[max_val > 200] = 255
@@ -367,7 +364,8 @@ def glow(glow_radius, glow_strength, src_image):
     max_val = np.stack([max_val, np.zeros_like(max_val), np.zeros_like(max_val)], axis=2)
     max_val = cv2.GaussianBlur(max_val, (glow_radius, glow_radius), 1)
     # combine the two images
-    # img_blended = cv2.addWeighted(src_image, 1, max_val, .5, 0)
+    # img_blended = cv2.addWeighted(src_image, 1, max_val, .8, 0)
+
     return max_val
 
 
@@ -416,12 +414,24 @@ if __name__ == "__main__":
                     f"C:/Users/gupta/Desktop/TinyTLP_comp/TinyTLP_rot{i}" for i in ("0", "60", "120", "180")
                 ]
 
+    args.run_config = 'efficientnet'
+
     if args.run_config == "all":
-        models = ["resnet18"]  # ["efficientnet-b0"] # "resnet50", "resnet34"
+        models = ["resnet18", "resnet34",
+                  "efficientnet-b0"]  # ["efficientnet-b0"] # "resnet50", "resnet34" 'resnet18','resnet34',
         n_features = [27, 512]  # use 27 for color features
         n_codes = [4, 8, 16, 32, 64, 128]
         rect_haar_filters = [1, 2, 3, 23]
         scales = [1, 2, 3]
+        scales = [2, 3]
+        pca_dims = [None, 18, 9]  # [None, 18, 9
+    elif args.run_config == "efficientnet":
+        models = ["efficientnet-b0", "efficientnet-b1", "efficientnet-b2", "efficientnet-b3", "efficientnet-b4"]
+        n_features = [27, 512]  # use 27 for color features
+        n_codes = [4, 8, 16, 32, 64, 128]
+        rect_haar_filters = [1, 2, 3, 23]
+        scales = [1, 2, 3]
+        scales = [2, 3]
         pca_dims = [None, 18, 9]  # [None, 18, 9
     elif args.run_config == "scale":
         models = ["resnet18"]
@@ -446,6 +456,7 @@ if __name__ == "__main__":
         pca_dims = [None, 18, 9]  # [None, 18, 9]
     else:
         models = [args.model]
+        models = ['resnet34']
         n_features = [args.n_features]
         n_codes = [args.n_codes]
         rect_haar_filters = [args.rect_haar_filters]
