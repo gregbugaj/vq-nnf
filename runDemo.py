@@ -144,11 +144,11 @@ def runTM(
         temp_x, temp_y, temp_w, temp_h = template_bbox
         temp_ws.append(temp_w)
         temp_hs.append(temp_h)
-        image_sizes.append(query_image.shape[0] * query_image.shape[1])
         temp_x = int(max(temp_x, 0))
         temp_y = int(max(temp_y, 0))
-
         template_features = template_image_features[:, temp_y: temp_y + temp_h, temp_x: temp_x + temp_w]
+
+        image_sizes.append(query_image.shape[0] * query_image.shape[1])
 
         template_matcher = VQNNFMatcher(
             template=template_features,

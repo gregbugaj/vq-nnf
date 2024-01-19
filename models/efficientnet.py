@@ -1,11 +1,7 @@
-from collections import OrderedDict
-from typing import Any, Callable, List, Optional, Type, Union
-
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from torch import Tensor, nn
 from efficientnet_pytorch import EfficientNet
+from torch import nn
 
 
 class EfficientNetHyperColumn(nn.Module):
